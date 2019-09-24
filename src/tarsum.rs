@@ -7,6 +7,7 @@ use tar::Archive;
 use std::fs::File;
 use sha2::{Sha256, Digest};
 use hex;
+use std::io::prelude::*;
 
 fn canonical_header_representation(header: &tar::Header) -> String {
     let link_name = match header.link_name().unwrap() {
@@ -19,10 +20,11 @@ fn canonical_header_representation(header: &tar::Header) -> String {
         header.uid().unwrap(),
         header.gid().unwrap(),
         header.size().unwrap(),
-        header.entry_type().as_byte(),
+        header.entry_type().as_byte() as char,
         link_name,
-        match header.username().unwrap() { Some(x) => x, None => ""},
-        match header.groupname().unwrap() { Some(x) => x, None => ""},
+        // uname and gname seems to be set to "" in the go implementation
+        "", // match header.username().unwrap() { Some(x) => x, None => ""},
+        "", // match header.groupname().unwrap() { Some(x) => x, None => ""},
         match header.device_major() { Ok(Some(x)) => x, _ => 0},
         match header.device_minor() { Ok(Some(x)) => x, _ => 0},
     )
@@ -64,7 +66,8 @@ mod tests {
 
     #[test]
     fn test_header() {
-//			"tarsum+sha256:626c4a2e9a467d65c33ae81f7f3dedd4de8ccaee72af73223c4bc4718cbc7bbd",
+        // $  /nix/store/69b2didvk2086qsn56l738dwbim6kz4v-tarsum/bin//tarsum </tmp/foo.txt
+        // tarsum.v1+sha256:6ffd43a1573a9913325b4918e124ee982a99c0f3cba90fc032a65f5e20bdd465
 		let mut test_header = tar::Header::new_gnu();
         test_header.set_path("file.txt").unwrap();
         test_header.set_size(0);
@@ -77,7 +80,7 @@ mod tests {
         test_header.set_cksum();
         assert_eq!(
             canonical_header_representation(&test_header),
-            "namefile.txtmode0uid0gid0size0typeflag48linknameunamegnamedevmajor0devminor0"
+            "namefile.txtmode0uid0gid0size0typeflag0linknameunamegnamedevmajor0devminor0"
         );
 
         let mut archive_builder = tar::Builder::new(Vec::new());
@@ -85,6 +88,9 @@ mod tests {
         let archive_bytes = archive_builder.into_inner().unwrap();
         let mut archive = Archive::new(&archive_bytes[..]);
 
-        print!("{}", tarsum(&mut archive));
+        assert_eq!(
+            tarsum(&mut archive),
+            "tarsum.v1+sha256:6ffd43a1573a9913325b4918e124ee982a99c0f3cba90fc032a65f5e20bdd465"
+        )
     }
 }
