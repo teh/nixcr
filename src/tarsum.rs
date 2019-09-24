@@ -2,18 +2,18 @@
 // https://github.com/moby/moby/blob/master/pkg/tarsum/tarsum_spec.md
 // known missing:
 // * xattr
-
 use tar::Archive;
 use std::fs::File;
 use sha2::{Sha256, Digest};
-use hex;
-use std::io::prelude::*;
 
-fn canonical_header_representation(header: &tar::Header) -> String {
-    let link_name = match header.link_name().unwrap() {
-        Some(x) => x.into_owned().display().to_string(),
-        None => "".to_string(),
-    };
+
+fn canonical_header_representation<R: std::io::Read>(entry: &tar::Entry<R>) -> String {
+    let link_name = match entry.link_name_bytes() { Some(x) => x.into_owned(), None => Vec::new() };
+    let link_name_str = std::str::from_utf8(&link_name).unwrap();
+    let header = entry.header();
+
+    // BUG! If a directory linkname seems to be missing the last part of the directory name?
+    // /asn1crypto-0.24.0.dist-info in this case..
     format!("name{}mode{}uid{}gid{}size{}typeflag{}linkname{}uname{}gname{}devmajor{}devminor{}",
         header.path().unwrap().display(),
         header.mode().unwrap(),
@@ -21,7 +21,7 @@ fn canonical_header_representation(header: &tar::Header) -> String {
         header.gid().unwrap(),
         header.size().unwrap(),
         header.entry_type().as_byte() as char,
-        link_name,
+        link_name_str,
         // uname and gname seems to be set to "" in the go implementation
         "", // match header.username().unwrap() { Some(x) => x, None => ""},
         "", // match header.groupname().unwrap() { Some(x) => x, None => ""},
@@ -31,11 +31,7 @@ fn canonical_header_representation(header: &tar::Header) -> String {
 }
 
 
-fn open() -> String {
-    let file = File::open("/nix/store/rnybsc38hj6gq6fd31b521hf735iyjjs-blarg-customisation-layer/layer.tar").unwrap();
-    let mut a = Archive::new(file);
-    tarsum(&mut a)
-}
+
 
 fn tarsum<R: std::marker::Sized + std::io::Read>(a: &mut tar::Archive<R>) -> String {
     let mut sums = Vec::new();
@@ -46,12 +42,11 @@ fn tarsum<R: std::marker::Sized + std::io::Read>(a: &mut tar::Archive<R>) -> Str
 
         // Inspect metadata about the file
         let mut hasher = Sha256::new();
-        hasher.input(canonical_header_representation(&file.header()));
-        std::io::copy(&mut file, &mut hasher);
+        hasher.input(canonical_header_representation(&file));
+        std::io::copy(&mut file, &mut hasher).unwrap();
         let result = hasher.result();
 
         sums.push(format!("{:x}", result));
-        // println!("{:?}, {:x}", file.header().path().unwrap(), result);
     }
     sums.sort();
     let full_sum = sha2::Sha256::digest(sums.join("").as_bytes());
@@ -63,6 +58,12 @@ fn tarsum<R: std::marker::Sized + std::io::Read>(a: &mut tar::Archive<R>) -> Str
 mod tests {
    // Note this useful idiom: importing names from outer (for mod tests) scope.
     use super::*;
+
+    fn _open() -> String {
+        let file = File::open("/nix/store/rnybsc38hj6gq6fd31b521hf735iyjjs-blarg-customisation-layer/layer.tar").unwrap();
+        let mut a = Archive::new(file);
+        tarsum(&mut a)
+    }
 
     #[test]
     fn test_header() {
@@ -78,10 +79,6 @@ mod tests {
         test_header.set_device_minor(0).unwrap();
         test_header.set_device_major(0).unwrap();
         test_header.set_cksum();
-        assert_eq!(
-            canonical_header_representation(&test_header),
-            "namefile.txtmode0uid0gid0size0typeflag0linknameunamegnamedevmajor0devminor0"
-        );
 
         let mut archive_builder = tar::Builder::new(Vec::new());
         archive_builder.append(&test_header, std::io::empty()).unwrap();
@@ -91,6 +88,8 @@ mod tests {
         assert_eq!(
             tarsum(&mut archive),
             "tarsum.v1+sha256:6ffd43a1573a9913325b4918e124ee982a99c0f3cba90fc032a65f5e20bdd465"
-        )
+        );
+
+        println!("-{}", _open());
     }
 }
