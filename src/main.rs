@@ -23,6 +23,7 @@ struct DockerManifestV2 {
 }
 
 #[derive(Serialize)]
+#[derive(Debug)]
 struct RootFS {
     #[serde(rename = "type")]
     type_: String,
@@ -39,6 +40,7 @@ struct LayerMeta {
 }
 
 
+#[derive(Debug)]
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RootFSContainer {
@@ -87,20 +89,24 @@ impl std::io::Write for HashAndWrite {
     }
 }
 
-fn build_layers()  {
+fn build_layers() -> Vec<LayerMeta> {
     let _build = std::process::Command::new("nix-build")
         .arg("/home/tom/src/nixpkgs")
         .arg("-A")
         .arg("hello")
         .output()
         .expect("build failed");
+    // TODO - rename out result so we can query it?
+    //     alternatively query output from _build.
     let query = std::process::Command::new("nix-store")
         .arg("-qR")
         .arg("result")
         .output()
         .expect("query failed");
 
-    // Dumb chunker
+    // Dumb even-sized layer chunker, I believe the query
+    // returns in dependency order so this chunker will at least
+    // pack some stuff together correctly.
     let mut all_paths = Vec::new();
     for x in query.stdout.split(|c| *c == 0x0au8) {
         if x.len() == 0 { continue };
@@ -108,12 +114,13 @@ fn build_layers()  {
     }
     let paths_per_layer = all_paths.len() / 100usize + 1;
 
+    // TODO - parametrize build path (temp folder?)
     let base_path = std::path::Path::new("/tmp/nixcr");
 
     let mut layers = Vec::new();
     for chunk in all_paths.chunks(paths_per_layer) {
          // TODO replace build.tar witih some temp thing
-        let temp_path = base_path.join("buid.tar");
+        let temp_path = base_path.join("layer.tar");
         let haw = HashAndWrite::new(&temp_path);
         let mut archive_builder = tar::Builder::new(haw);
         archive_builder.follow_symlinks(false); // keep symlinks in docker
@@ -128,20 +135,25 @@ fn build_layers()  {
         // because it goes into the layer meta)
         layers.push(LayerMeta {
             media_type: "application/vnd.docker.image.rootfs.diff.tar.gzip".to_string(),
-            digest: archive.hex_encoded_hash(),
+            digest: format!("sha256:{}", archive.hex_encoded_hash()),
             size: archive.get_size(),
         });
+        // TODO - actually move layer.tar somewhere
     }
-    ()
+    layers
+}
+
+fn blobs(info: web::Path<(String, String)>) -> HttpResponse {
+    HttpResponse::Ok().body("".to_string())
 }
 
 
-fn manifest(info: web::Path<(String, String)>) -> HttpResponse {
+fn manifests(info: web::Path<(String, String)>) -> HttpResponse {
     // tar_path = _git_checkout(name)
     // attribute_path = reference.split('.')
     // m['layers'] = list(_build_layers(attribute_path, tar_path))
 
-    build_layers();
+    let layers = build_layers();
 
     let rootfs = RootFSContainer {
         architecture: "amd64".to_string(),
@@ -149,12 +161,13 @@ fn manifest(info: web::Path<(String, String)>) -> HttpResponse {
         os: "linux".to_string(),
         rootfs: RootFS {
             type_: "layers".to_string(),
-            diff_ids: Vec::new(),
+            diff_ids: layers.iter().map(|x| x.digest.clone()).collect(),
         },
     };
 
     // create a blob for the rootfs object
     let rootfs_blob = serde_json::to_vec(&rootfs).unwrap();
+
     let mut hasher = Sha256::new();
     hasher.input(&rootfs_blob);
     let digest = hasher.result_str();
@@ -171,6 +184,7 @@ fn manifest(info: web::Path<(String, String)>) -> HttpResponse {
     };
 
     HttpResponse::Ok()
+        .content_type("application/vnd.docker.distribution.manifest.v2+json")
         .json(manifest)
 }
 
@@ -187,7 +201,8 @@ fn main() -> std::io::Result<()>  {
     HttpServer::new(
         || App::new()
             .route("/v2/", web::get().to(v2))
-            .route("/v2/{name:.*?}/manifests/{reference}", web::get().to(manifest))
+            .route("/v2/{name:.*?}/manifests/{reference}", web::get().to(manifests))
+            .route("/v2/{name:.*?}/blobs/{reference}", web::get().to(blobs))
     ).bind("127.0.0.1:8888")?
     .run()
 }
