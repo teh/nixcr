@@ -2,9 +2,8 @@ use actix_web::{web, App, HttpServer, HttpResponse};
 use serde::{Serialize};
 use std::vec::{Vec};
 use serde_json;
-use sha2::{Sha256, Digest};
-
-mod tarsum;
+use crypto::sha2::{Sha256};
+use crypto::digest::{Digest};
 
 
 #[derive(Serialize)]
@@ -25,9 +24,20 @@ struct DockerManifestV2 {
 
 #[derive(Serialize)]
 struct RootFS {
+    #[serde(rename = "type")]
     type_: String,
     diff_ids: Vec<String>, // NB no camel case
 }
+
+
+#[serde(rename_all = "camelCase")]
+#[derive(Serialize)]
+struct LayerMeta {
+    media_type: String,
+    size: usize, // size of layer.tar
+    digest: String, // compressed
+}
+
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -38,6 +48,44 @@ struct RootFSContainer {
     rootfs: RootFS,
 }
 
+struct HashAndWrite {
+    // implement Write trait but pipe output into hasher as well as file.
+    tar: std::io::BufWriter<std::fs::File>,
+    digest: Sha256,
+    size: usize,
+}
+
+/// implement io::Write and hash at the same time as writing the tarball
+impl HashAndWrite {
+    fn new(path: &std::path::Path) -> HashAndWrite {
+        HashAndWrite {
+            // the tar writer seems somewht slow, and BufWriter
+            // didn't make it faster.
+            tar: std::io::BufWriter::new(std::fs::File::create(path).unwrap()),
+            digest: Sha256::new(),
+            size: 0,
+        }
+    }
+
+    fn hex_encoded_hash(&mut self) -> String {
+        self.digest.result_str()
+    }
+
+    fn get_size(&mut self) -> usize {
+        self.size
+    }
+}
+
+impl std::io::Write for HashAndWrite {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.digest.input(buf);
+        self.size += buf.len();
+        self.tar.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.tar.flush()
+    }
+}
 
 fn build_layers()  {
     let _build = std::process::Command::new("nix-build")
@@ -62,28 +110,28 @@ fn build_layers()  {
 
     let base_path = std::path::Path::new("/tmp/nixcr");
 
+    let mut layers = Vec::new();
     for chunk in all_paths.chunks(paths_per_layer) {
-        // todo new needs to be sth that implements the Write trait other than Vec::new()
-
          // TODO replace build.tar witih some temp thing
-        let mut archive_builder = tar::Builder::new(std::fs::File::create(base_path.join("buid.tar")).unwrap());
+        let temp_path = base_path.join("buid.tar");
+        let haw = HashAndWrite::new(&temp_path);
+        let mut archive_builder = tar::Builder::new(haw);
         archive_builder.follow_symlinks(false); // keep symlinks in docker
 
         for x in chunk {
             println!("{:?}", x);
             archive_builder.append_dir_all(x.strip_prefix("/").unwrap(), x).unwrap();
         }
-        archive_builder.into_inner().unwrap();
+        let mut archive = archive_builder.into_inner().unwrap();
+
+        // Move built key to its digest (which we need to calculate anyway due
+        // because it goes into the layer meta)
+        layers.push(LayerMeta {
+            media_type: "application/vnd.docker.image.rootfs.diff.tar.gzip".to_string(),
+            digest: archive.hex_encoded_hash(),
+            size: archive.get_size(),
+        });
     }
-
-    // partition into buckets
-    // layer_meta = {
-    //     "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip", // not sure I need to compress?
-    //     "size": size, // size of layer.tar
-    //     "digest": digest, // compressed
-    //     "layer_sha256": layer_sha256, // uncompressed
-    // }
-
     ()
 }
 
@@ -107,7 +155,9 @@ fn manifest(info: web::Path<(String, String)>) -> HttpResponse {
 
     // create a blob for the rootfs object
     let rootfs_blob = serde_json::to_vec(&rootfs).unwrap();
-    let digest = format!("{:x}", Sha256::digest(&rootfs_blob));
+    let mut hasher = Sha256::new();
+    hasher.input(&rootfs_blob);
+    let digest = hasher.result_str();
 
     // TODO "sha256:" +
     let manifest = DockerManifestV2 {
