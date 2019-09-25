@@ -52,11 +52,38 @@ fn build_layers()  {
         .output()
         .expect("query failed");
 
-    // split query by newlines
+    // Dumb chunker
+    let mut all_paths = Vec::new();
     for x in query.stdout.split(|c| *c == 0x0au8) {
         if x.len() == 0 { continue };
-        println!("{:?}", std::path::Path::new(std::str::from_utf8(x).unwrap()))
+        all_paths.push(std::path::Path::new(std::str::from_utf8(x).unwrap()));
     }
+    let paths_per_layer = all_paths.len() / 100usize + 1;
+
+    let base_path = std::path::Path::new("/tmp/nixcr");
+
+    for chunk in all_paths.chunks(paths_per_layer) {
+        // todo new needs to be sth that implements the Write trait other than Vec::new()
+
+         // TODO replace build.tar witih some temp thing
+        let mut archive_builder = tar::Builder::new(std::fs::File::create(base_path.join("buid.tar")).unwrap());
+        archive_builder.follow_symlinks(false); // keep symlinks in docker
+
+        for x in chunk {
+            println!("{:?}", x);
+            archive_builder.append_dir_all(x.strip_prefix("/").unwrap(), x).unwrap();
+        }
+        archive_builder.into_inner().unwrap();
+    }
+
+    // partition into buckets
+    // layer_meta = {
+    //     "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip", // not sure I need to compress?
+    //     "size": size, // size of layer.tar
+    //     "digest": digest, // compressed
+    //     "layer_sha256": layer_sha256, // uncompressed
+    // }
+
     ()
 }
 

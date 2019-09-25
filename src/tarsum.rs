@@ -1,3 +1,7 @@
+// NB it looks like tarsum is bad and probably isn't even needed for this service:
+// https://lwn.net/Articles/628343/
+// Might delete at some point.
+//
 // Partial and fragile implementation of tarsum
 // https://github.com/moby/moby/blob/master/pkg/tarsum/tarsum_spec.md
 // known missing:
@@ -33,8 +37,6 @@ fn canonical_header_representation<R: std::io::Read>(entry: &tar::Entry<R>) -> S
         match header.device_minor() { Ok(Some(x)) => x, _ => 0},
     )
 }
-
-
 
 
 fn tarsum<R: std::marker::Sized + std::io::Read>(a: &mut tar::Archive<R>) -> String {
