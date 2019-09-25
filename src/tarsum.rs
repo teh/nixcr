@@ -1,7 +1,11 @@
-// Partial implementation of tarsum
+// Partial and fragile implementation of tarsum
 // https://github.com/moby/moby/blob/master/pkg/tarsum/tarsum_spec.md
 // known missing:
 // * xattr
+// * dealing with duplicated entries
+//
+// Could be better
+// * error handling instead of unwrap
 use tar::Archive;
 use std::fs::File;
 use sha2::{Sha256, Digest};
@@ -37,10 +41,8 @@ fn tarsum<R: std::marker::Sized + std::io::Read>(a: &mut tar::Archive<R>) -> Str
     let mut sums = Vec::new();
 
     for file in a.entries().unwrap() {
-        // Make sure there wasn't an I/O error
         let mut file = file.unwrap();
 
-        // Inspect metadata about the file
         let mut hasher = Sha256::new();
         hasher.input(canonical_header_representation(&file));
         std::io::copy(&mut file, &mut hasher).unwrap();
@@ -56,7 +58,6 @@ fn tarsum<R: std::marker::Sized + std::io::Read>(a: &mut tar::Archive<R>) -> Str
 
 #[cfg(test)]
 mod tests {
-   // Note this useful idiom: importing names from outer (for mod tests) scope.
     use super::*;
 
     fn _open() -> String {
@@ -90,6 +91,7 @@ mod tests {
             "tarsum.v1+sha256:6ffd43a1573a9913325b4918e124ee982a99c0f3cba90fc032a65f5e20bdd465"
         );
 
-        println!("-{}", _open());
+        // testing the following needs file system access
+        // println!("{}", _open());
     }
 }
