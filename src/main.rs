@@ -177,11 +177,7 @@ fn blobs(config: web::Data<std::sync::Arc<Config>>, info: web::Path<(String, Str
 
 
 fn manifests(config: web::Data<std::sync::Arc<Config>>, info: web::Path<(String, String)>) -> HttpResponse {
-    // tar_path = _git_checkout(name)
-    // attribute_path = reference.split('.')
-    // m['layers'] = list(_build_layers(attribute_path, tar_path))
-
-    let layers = build_layers(&config, "hello");
+    let layers = build_layers(&config, &info.1);
 
     let rootfs = RootFSContainer {
         architecture: "amd64".to_string(),
