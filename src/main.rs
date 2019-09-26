@@ -10,15 +10,17 @@
 // * private cache (minio?)
 // * caching from key to layers
 #[macro_use] extern crate log;
+use std::collections::HashMap;
 use actix_files::NamedFile;
 use actix_web::{web, App, HttpServer, HttpResponse};
-use serde::{Serialize};
+use serde::{Serialize, Deserialize};
 use std::vec::{Vec};
 use serde_json;
 use crypto::sha2::{Sha256};
 use crypto::digest::{Digest};
 use std::sync::Arc;
 use actix_web::middleware::Logger;
+use docopt::Docopt;
 
 mod store;
 
@@ -29,6 +31,7 @@ struct Config<'a> {
     blob_root: &'a std::path::Path,
     /// Where to clone the git repos
     repo_root: &'a std::path::Path,
+    repo_configs: HashMap<String, RepoConfig>,
 }
 
 #[derive(Serialize)]
@@ -118,8 +121,10 @@ impl std::io::Write for HashAndWrite {
 }
 
 /// clones (or fetches if already cloned) a git repo.
-fn clone_or_fetch_repo(git_dir: &std:path::Path) {
+fn clone_or_fetch_repo(repo_root: &std::path::Path, repo_config: &RepoConfig) {
+    let git_dir = repo_root.join(repo_config.git_dir());
     if git_dir.is_dir() {
+        info!("fetching for {:?}", git_dir);
         std::process::Command::new("git")
             .arg("--git-dir")
             .arg(git_dir)
@@ -127,19 +132,26 @@ fn clone_or_fetch_repo(git_dir: &std:path::Path) {
             .output();
     } else {
         // TODO make repo configurable + ssh key env
+        info!("cloning {:?} to {:?}", repo_config.url, git_dir);
         std::process::Command::new("git")
             .arg("--git-dir")
             .arg(git_dir)
             .arg("clone")
-            .arg("https://github.com/NixOS/nixpkgs")
+            .arg("--bare")
+            .arg(&repo_config.url)
             .output();
     }
 }
 
 
-fn build_layers(config: &Config, attr_path: &str) -> Vec<LayerMeta> {
+fn build_layers(config: &Config, lookup_key: &str, attr_path: &str) -> Vec<LayerMeta> {
+    info!("looking up {}", lookup_key);
+    match config.repo_configs.get(lookup_key) {
+        Some(repo_config) => clone_or_fetch_repo(config.repo_root, repo_config),
+        None => panic!("Unknown lookup key {}", lookup_key),
+    }
     let _build = std::process::Command::new("nix-build")
-        .arg("/home/tom/src/nixpkgs")
+        .arg("/home/tom/src/nixpkgs") // get git tarball
         .arg("-A")
         .arg(attr_path)
         .output()
@@ -204,7 +216,7 @@ fn blobs(config: web::Data<std::sync::Arc<Config>>, info: web::Path<(String, Str
 
 
 fn manifests(config: web::Data<std::sync::Arc<Config>>, info: web::Path<(String, String)>) -> HttpResponse {
-    let layers = build_layers(&config, &info.1);
+    let layers = build_layers(&config, &info.0, &info.1);
 
     let rootfs = RootFSContainer {
         architecture: "amd64".to_string(),
@@ -251,12 +263,70 @@ fn v2() -> HttpResponse {
         .body("")
 }
 
+const USAGE: &'static str = "
+Usage: nixcr --repo REPO...
+
+Options:
+    --repo REPO         One repo config in the form url,key-path
+";
+
+#[derive(Deserialize)]
+#[derive(Debug)]
+struct Args {
+    flag_repo: Vec<String>
+}
+
+
+#[derive(Debug)]
+struct RepoConfig {
+    // todo - can this be done with str and a lifetime annotation?
+    // could not figure out how that interacts with the App || move..
+    lookup_key: String, // local reference path
+    url: String,
+    deploy_key_path: Option<std::path::PathBuf>,
+}
+
+impl RepoConfig {
+    /// parse a repo string of the form URL,key-path or just URL
+    /// into a repo
+    fn parse(s: &str) -> RepoConfig {
+        let parts: Vec<&str> = s.split(',').collect();
+        match parts.as_slice() {
+            [lookup_key, url] => RepoConfig {
+                lookup_key: String::from(*lookup_key),
+                url: String::from(*url),
+                deploy_key_path: None,
+            },
+            [lookup_key, url, deploy_key_path] => RepoConfig {
+                lookup_key: String::from(*lookup_key),
+                url: String::from(*url),
+                deploy_key_path: Some(std::path::PathBuf::from(deploy_key_path)),
+            },
+            _ => panic!("no"),
+        }
+    }
+    /// returns path for where to clone / fetch the repo
+    fn git_dir(&self) -> std::path::PathBuf {
+        let re = regex::Regex::new(r"[^A-Za-z_]").unwrap();
+        // anything that's not a letter gets replaced with _
+        // this can lead to collisions which is not great but OK for this use case?
+        std::path::PathBuf::from(re.replace_all(&self.url, "_").into_owned())
+    }
+}
 
 fn main() -> std::io::Result<()>  {
     env_logger::init();
+    let args: Args = docopt::Docopt::new(USAGE).unwrap().deserialize().unwrap();
+    let repo_configs: HashMap<String, RepoConfig> = args.flag_repo.iter().map(
+        |x| {
+            let rc = RepoConfig::parse(&x);
+            (String::from(&rc.lookup_key), rc)
+        }).collect();
 
     let config = web::Data::new(Arc::new(Config {
         blob_root: std::path::Path::new("/tmp/blobs"),
+        repo_root: std::path::Path::new("/tmp/repos"),
+        repo_configs: repo_configs,
     }));
     HttpServer::new(
         move || App::new()
