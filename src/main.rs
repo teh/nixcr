@@ -3,7 +3,8 @@
 // Could be better:
 // * non-unwrap error handling
 // * layer packing
-// * more consistent naming for the docker JSON structure
+// * more consistent naming for the docker JSON structure]
+use actix_files::NamedFile;
 use actix_web::{web, App, HttpServer, HttpResponse};
 use serde::{Serialize};
 use std::vec::{Vec};
@@ -161,8 +162,14 @@ fn build_layers(config: web::Data<std::sync::Arc<Config>>, attr_path: &str) -> V
     layers
 }
 
-fn blobs(config: web::Data<std::sync::Arc<Config>>, info: web::Path<(String, String)>) -> HttpResponse {
-    HttpResponse::Ok().body("".to_string())
+
+fn blobs(config: web::Data<std::sync::Arc<Config>>, info: web::Path<(String, String)>) -> actix_web::Result<NamedFile> {
+    let blob_path = config.blob_root.join(info.1.clone());
+    if !blob_path.is_file() {
+        Err(actix_web::error::ErrorNotFound(""))
+    } else {
+        Ok(NamedFile::open(blob_path)?)
+    }
 }
 
 
@@ -218,7 +225,7 @@ fn v2() -> HttpResponse {
 fn main() -> std::io::Result<()>  {
 
     let config = web::Data::new(Arc::new(Config {
-        blob_root: std::path::Path::new("/tmp"),
+        blob_root: std::path::Path::new("/tmp/blobs"),
     }));
     HttpServer::new(
         move || App::new()
