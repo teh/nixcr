@@ -4,6 +4,11 @@
 // * non-unwrap error handling
 // * layer packing
 // * more consistent naming for the docker JSON structure]
+//
+// TODO
+// * git repo integration (fetch before build)
+// * private cache (minio?)
+// * caching from key to layers
 #[macro_use] extern crate log;
 use actix_files::NamedFile;
 use actix_web::{web, App, HttpServer, HttpResponse};
@@ -22,6 +27,8 @@ mod store;
 struct Config<'a> {
     /// Directory to store and serve blobs. Must exist.
     blob_root: &'a std::path::Path,
+    /// Where to clone the git repos
+    repo_root: &'a std::path::Path,
 }
 
 #[derive(Serialize)]
@@ -109,6 +116,26 @@ impl std::io::Write for HashAndWrite {
         self.tar.flush()
     }
 }
+
+/// clones (or fetches if already cloned) a git repo.
+fn clone_or_fetch_repo(git_dir: &std:path::Path) {
+    if git_dir.is_dir() {
+        std::process::Command::new("git")
+            .arg("--git-dir")
+            .arg(git_dir)
+            .arg("fetch")
+            .output();
+    } else {
+        // TODO make repo configurable + ssh key env
+        std::process::Command::new("git")
+            .arg("--git-dir")
+            .arg(git_dir)
+            .arg("clone")
+            .arg("https://github.com/NixOS/nixpkgs")
+            .output();
+    }
+}
+
 
 fn build_layers(config: &Config, attr_path: &str) -> Vec<LayerMeta> {
     let _build = std::process::Command::new("nix-build")
