@@ -39,6 +39,7 @@ struct DockerManifestV2 {
     schema_version: usize,
     media_type: String,
     config: DockerManifestV2Config,
+    layers: Vec<LayerMeta>,
 }
 
 
@@ -211,6 +212,7 @@ fn manifests(config: web::Data<std::sync::Arc<Config>>, info: web::Path<(String,
             size: rootfs_blob.len(),
             digest: digest,
         },
+        layers: layers,
     };
 
     HttpResponse::Ok()
