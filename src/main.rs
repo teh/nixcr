@@ -20,7 +20,6 @@ use crypto::sha2::{Sha256};
 use crypto::digest::{Digest};
 use std::sync::Arc;
 use actix_web::middleware::Logger;
-use docopt::Docopt;
 
 mod store;
 
@@ -121,41 +120,70 @@ impl std::io::Write for HashAndWrite {
 }
 
 /// clones (or fetches if already cloned) a git repo.
-fn clone_or_fetch_repo(repo_root: &std::path::Path, repo_config: &RepoConfig) {
-    let git_dir = repo_root.join(repo_config.git_dir());
+fn clone_or_fetch_repo(git_dir: &std::path::Path, repo_config: &RepoConfig) {
     if git_dir.is_dir() {
         info!("fetching for {:?}", git_dir);
         std::process::Command::new("git")
             .arg("--git-dir")
             .arg(git_dir)
             .arg("fetch")
-            .output();
+            .env("GIT_SSH_COMMAND", match &repo_config.deploy_key_path {
+                Some(path) => format!("ssh -i {}", path.display()),
+                None => "ssh".to_string(),
+            })
+            .status().unwrap();
     } else {
         // TODO make repo configurable + ssh key env
         info!("cloning {:?} to {:?}", repo_config.url, git_dir);
         std::process::Command::new("git")
-            .arg("--git-dir")
-            .arg(git_dir)
             .arg("clone")
             .arg("--bare")
             .arg(&repo_config.url)
-            .output();
+            .arg(git_dir)
+            .status().unwrap();
     }
 }
 
+fn get_git_tarball(git_dir: &std::path::Path, config: &Config, commit: &str) -> std::path::PathBuf {
+    // TODO - cache tarballs
+    let tar_bytes = std::process::Command::new("git")
+        .arg("--git-dir")
+        .arg(git_dir)
+        .arg("archive")
+        .arg("--prefix")
+        // Prefix will be stripped by nix-build. The "/" is important: don't remove
+        .arg("x/")
+        .arg(commit)
+        .output().unwrap().stdout;
 
-fn build_layers(config: &Config, lookup_key: &str, attr_path: &str) -> Vec<LayerMeta> {
-    info!("looking up {}", lookup_key);
-    match config.repo_configs.get(lookup_key) {
-        Some(repo_config) => clone_or_fetch_repo(config.repo_root, repo_config),
+    // TODO - blob_root is served via http so probably not the best place
+    // to store the tarballs.
+    // TODO - process::Command write straight to a file?
+    let tar_path = config.blob_root.join(commit);
+    std::fs::write(&tar_path, tar_bytes).unwrap();
+    tar_path
+}
+
+
+fn build_layers(config: &Config, lookup_key: &str, commit: &str, attr_path: &str) -> Vec<LayerMeta> {
+    info!("looking up {}, commit {}", lookup_key, commit);
+    let repo_config = match config.repo_configs.get(lookup_key) {
+        Some(repo_config) => repo_config,
         None => panic!("Unknown lookup key {}", lookup_key),
-    }
+    };
+    // I really have't gotten the abstraction right here given that I have to
+    // pass around repo_config everywhere. Maybe better
+    let git_dir = config.repo_root.join(repo_config.git_dir());
+    clone_or_fetch_repo(&git_dir, &repo_config);
+    let tar_path = get_git_tarball(&git_dir, &config, &commit);
+
     let _build = std::process::Command::new("nix-build")
-        .arg("/home/tom/src/nixpkgs") // get git tarball
+        .arg(format!("file:///{}", tar_path.display()))
         .arg("-A")
         .arg(attr_path)
-        .output()
+        .status()
         .expect("build failed");
+
     // TODO - rename out result so we can query it?
     //     alternatively query output from _build.
     let query = std::process::Command::new("nix-store")
@@ -204,9 +232,11 @@ fn build_layers(config: &Config, lookup_key: &str, attr_path: &str) -> Vec<Layer
     layers
 }
 
+type HandlerConfig<'a> = web::Data<std::sync::Arc<Config<'a>>>;
 
-fn blobs(config: web::Data<std::sync::Arc<Config>>, info: web::Path<(String, String)>) -> actix_web::Result<NamedFile> {
-    let blob_path = config.blob_root.join(info.1.clone());
+
+fn blobs(config: HandlerConfig, info: web::Path<(String, String, String)>) -> actix_web::Result<NamedFile> {
+    let blob_path = config.blob_root.join(info.2.clone());
     if !blob_path.is_file() {
         Err(actix_web::error::ErrorNotFound(""))
     } else {
@@ -215,8 +245,8 @@ fn blobs(config: web::Data<std::sync::Arc<Config>>, info: web::Path<(String, Str
 }
 
 
-fn manifests(config: web::Data<std::sync::Arc<Config>>, info: web::Path<(String, String)>) -> HttpResponse {
-    let layers = build_layers(&config, &info.0, &info.1);
+fn manifests(config: HandlerConfig, info: web::Path<(String, String, String)>) -> HttpResponse {
+    let layers = build_layers(&config, &info.0, &info.1, &info.2);
 
     let rootfs = RootFSContainer {
         architecture: "amd64".to_string(),
@@ -333,8 +363,8 @@ fn main() -> std::io::Result<()>  {
             .wrap(Logger::default())
             .register_data(config.clone())
             .route("/v2/", web::get().to(v2))
-            .route("/v2/{name:.*?}/manifests/{reference}", web::get().to(manifests))
-            .route("/v2/{name:.*?}/blobs/{reference}", web::get().to(blobs))
+            .route("/v2/{lookup_key}/{commit}/manifests/{reference}", web::get().to(manifests))
+            .route("/v2/{lookup_key}/{commit}/blobs/{reference}", web::get().to(blobs))
     ).bind("127.0.0.1:8888")?
     .run()
 }
