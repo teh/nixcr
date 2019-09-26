@@ -9,27 +9,27 @@
 // * git repo integration (fetch before build)
 // * private cache (minio?)
 // * caching from key to layers
-#[macro_use] extern crate log;
-use std::collections::HashMap;
+#[macro_use]
+extern crate log;
 use actix_files::NamedFile;
-use actix_web::{web, App, HttpServer, HttpResponse};
-use serde::{Serialize, Deserialize};
-use std::vec::{Vec};
-use serde_json;
-use crypto::sha2::{Sha256};
-use crypto::digest::{Digest};
-use std::sync::Arc;
 use actix_web::middleware::Logger;
+use actix_web::{web, App, HttpResponse, HttpServer};
+use crypto::digest::Digest;
+use crypto::sha2::Sha256;
+use serde::{Deserialize, Serialize};
+use serde_json;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::vec::Vec;
 
 mod store;
 
-
 #[derive(Debug)]
-struct Config<'a> {
+struct Config {
     /// Directory to store and serve blobs. Must exist.
-    blob_root: &'a std::path::Path,
+    blob_root: std::path::PathBuf,
     /// Where to clone the git repos
-    repo_root: &'a std::path::Path,
+    repo_root: std::path::PathBuf,
     repo_configs: HashMap<String, RepoConfig>,
 }
 
@@ -41,7 +41,6 @@ struct DockerManifestV2Config {
     digest: String,
 }
 
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DockerManifestV2 {
@@ -51,27 +50,22 @@ struct DockerManifestV2 {
     layers: Vec<LayerMeta>,
 }
 
-
-#[derive(Serialize)]
-#[derive(Debug)]
+#[derive(Serialize, Debug)]
 struct RootFS {
     #[serde(rename = "type")]
     type_: String,
     diff_ids: Vec<String>, // NB no camel case
 }
 
-
 #[serde(rename_all = "camelCase")]
 #[derive(Serialize)]
 struct LayerMeta {
     media_type: String,
-    size: usize, // size of layer.tar
+    size: usize,    // size of layer.tar
     digest: String, // compressed
 }
 
-
-#[derive(Debug)]
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RootFSContainer {
     architecture: String,
@@ -127,11 +121,15 @@ fn clone_or_fetch_repo(git_dir: &std::path::Path, repo_config: &RepoConfig) {
             .arg("--git-dir")
             .arg(git_dir)
             .arg("fetch")
-            .env("GIT_SSH_COMMAND", match &repo_config.deploy_key_path {
-                Some(path) => format!("ssh -i {}", path.display()),
-                None => "ssh".to_string(),
-            })
-            .status().unwrap();
+            .env(
+                "GIT_SSH_COMMAND",
+                match &repo_config.deploy_key_path {
+                    Some(path) => format!("ssh -i {}", path.display()),
+                    None => "ssh".to_string(),
+                },
+            )
+            .status()
+            .unwrap();
     } else {
         // TODO make repo configurable + ssh key env
         info!("cloning {:?} to {:?}", repo_config.url, git_dir);
@@ -140,7 +138,8 @@ fn clone_or_fetch_repo(git_dir: &std::path::Path, repo_config: &RepoConfig) {
             .arg("--bare")
             .arg(&repo_config.url)
             .arg(git_dir)
-            .status().unwrap();
+            .status()
+            .unwrap();
     }
 }
 
@@ -154,7 +153,9 @@ fn get_git_tarball(git_dir: &std::path::Path, config: &Config, commit: &str) -> 
         // Prefix will be stripped by nix-build. The "/" is important: don't remove
         .arg("x/")
         .arg(commit)
-        .output().unwrap().stdout;
+        .output()
+        .unwrap()
+        .stdout;
 
     // TODO - blob_root is served via http so probably not the best place
     // to store the tarballs.
@@ -164,8 +165,12 @@ fn get_git_tarball(git_dir: &std::path::Path, config: &Config, commit: &str) -> 
     tar_path
 }
 
-
-fn build_layers(config: &Config, lookup_key: &str, commit: &str, attr_path: &str) -> Vec<LayerMeta> {
+fn build_layers(
+    config: &Config,
+    lookup_key: &str,
+    commit: &str,
+    attr_path: &str,
+) -> Vec<LayerMeta> {
     info!("looking up {}, commit {}", lookup_key, commit);
     let repo_config = match config.repo_configs.get(lookup_key) {
         Some(repo_config) => repo_config,
@@ -197,7 +202,9 @@ fn build_layers(config: &Config, lookup_key: &str, commit: &str, attr_path: &str
     // pack some stuff together correctly.
     let mut all_paths = Vec::new();
     for x in query.stdout.split(|c| *c == 0x0au8) {
-        if x.len() == 0 { continue };
+        if x.is_empty() {
+            continue;
+        };
         all_paths.push(std::path::Path::new(std::str::from_utf8(x).unwrap()));
     }
     let paths_per_layer = all_paths.len() / 100usize + 1;
@@ -207,7 +214,7 @@ fn build_layers(config: &Config, lookup_key: &str, commit: &str, attr_path: &str
 
     let mut layers = Vec::new();
     for chunk in all_paths.chunks(paths_per_layer) {
-         // TODO replace build.tar witih some temp thing
+        // TODO replace build.tar witih some temp thing
         let temp_path = base_path.join("layer.tar");
         let haw = HashAndWrite::new(&temp_path);
         let mut archive_builder = tar::Builder::new(haw);
@@ -215,7 +222,9 @@ fn build_layers(config: &Config, lookup_key: &str, commit: &str, attr_path: &str
         archive_builder.follow_symlinks(false);
 
         for x in chunk {
-            archive_builder.append_dir_all(x.strip_prefix("/").unwrap(), x).unwrap();
+            archive_builder
+                .append_dir_all(x.strip_prefix("/").unwrap(), x)
+                .unwrap();
         }
         let mut archive = archive_builder.into_inner().unwrap();
 
@@ -232,10 +241,12 @@ fn build_layers(config: &Config, lookup_key: &str, commit: &str, attr_path: &str
     layers
 }
 
-type HandlerConfig<'a> = web::Data<std::sync::Arc<Config<'a>>>;
+type HandlerConfig = web::Data<std::sync::Arc<Config>>;
 
-
-fn blobs(config: HandlerConfig, info: web::Path<(String, String, String)>) -> actix_web::Result<NamedFile> {
+fn blobs(
+    config: HandlerConfig,
+    info: web::Path<(String, String, String)>,
+) -> actix_web::Result<NamedFile> {
     let blob_path = config.blob_root.join(info.2.clone());
     if !blob_path.is_file() {
         Err(actix_web::error::ErrorNotFound(""))
@@ -243,7 +254,6 @@ fn blobs(config: HandlerConfig, info: web::Path<(String, String, String)>) -> ac
         Ok(NamedFile::open(blob_path)?)
     }
 }
-
 
 fn manifests(config: HandlerConfig, info: web::Path<(String, String, String)>) -> HttpResponse {
     let layers = build_layers(&config, &info.0, &info.1, &info.2);
@@ -275,16 +285,15 @@ fn manifests(config: HandlerConfig, info: web::Path<(String, String, String)>) -
         config: DockerManifestV2Config {
             media_type: "application/vnd.docker.container.image.v1+json".to_string(),
             size: rootfs_blob.len(),
-            digest: digest,
+            digest,
         },
-        layers: layers,
+        layers,
     };
 
     HttpResponse::Ok()
         .content_type("application/vnd.docker.distribution.manifest.v2+json")
         .json(manifest)
 }
-
 
 fn v2() -> HttpResponse {
     HttpResponse::Ok()
@@ -293,19 +302,21 @@ fn v2() -> HttpResponse {
         .body("")
 }
 
-const USAGE: &'static str = "
-Usage: nixcr --repo REPO...
+const USAGE: &str = "
+Usage: nixcr --blob-root BLOBROOT --repo-root REPOROOT --repo REPO...
 
 Options:
-    --repo REPO         One repo config in the form url,key-path
+    --blob-root BLOBROOT  Where to store blobs (e.g. persistent disk)
+    --repo-root REPOROOT  Where to store cloned repos (e.g. persitent disk)
+    --repo REPO            One repo config in the form url,key-path
 ";
 
-#[derive(Deserialize)]
-#[derive(Debug)]
+#[derive(Deserialize, Debug)]
 struct Args {
-    flag_repo: Vec<String>
+    flag_repo: Vec<String>,
+    flag_repo_root: String,
+    flag_blob_root: String,
 }
-
 
 #[derive(Debug)]
 struct RepoConfig {
@@ -344,27 +355,41 @@ impl RepoConfig {
     }
 }
 
-fn main() -> std::io::Result<()>  {
+fn main() -> std::io::Result<()> {
     env_logger::init();
     let args: Args = docopt::Docopt::new(USAGE).unwrap().deserialize().unwrap();
-    let repo_configs: HashMap<String, RepoConfig> = args.flag_repo.iter().map(
-        |x| {
+    let repo_configs: HashMap<String, RepoConfig> = args
+        .flag_repo
+        .iter()
+        .map(|x| {
             let rc = RepoConfig::parse(&x);
             (String::from(&rc.lookup_key), rc)
-        }).collect();
+        })
+        .collect();
 
     let config = web::Data::new(Arc::new(Config {
-        blob_root: std::path::Path::new("/tmp/blobs"),
-        repo_root: std::path::Path::new("/tmp/repos"),
-        repo_configs: repo_configs,
+        blob_root: std::path::PathBuf::from(&args.flag_blob_root),
+        repo_root: std::path::PathBuf::from(&args.flag_repo_root),
+        repo_configs,
     }));
-    HttpServer::new(
-        move || App::new()
+
+    std::fs::create_dir_all(&config.blob_root).unwrap();
+    std::fs::create_dir_all(&config.repo_root).unwrap();
+
+    HttpServer::new(move || {
+        App::new()
             .wrap(Logger::default())
             .register_data(config.clone())
             .route("/v2/", web::get().to(v2))
-            .route("/v2/{lookup_key}/{commit}/manifests/{reference}", web::get().to(manifests))
-            .route("/v2/{lookup_key}/{commit}/blobs/{reference}", web::get().to(blobs))
-    ).bind("127.0.0.1:8888")?
+            .route(
+                "/v2/{lookup_key}/{commit}/manifests/{reference}",
+                web::get().to(manifests),
+            )
+            .route(
+                "/v2/{lookup_key}/{commit}/blobs/{reference}",
+                web::get().to(blobs),
+            )
+    })
+    .bind("127.0.0.1:8888")?
     .run()
 }

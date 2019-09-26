@@ -3,7 +3,8 @@ with import <nixpkgs> {};
 stdenv.mkDerivation {
   name = "rust-env";
   nativeBuildInputs = [
-    rustc cargo
+    rustc cargo rustPackages.clippy
+    rustPackages.rustfmt
   ];
   buildInputs = [
     openssl
