@@ -1,10 +1,25 @@
+// Docker v2 registry that shells out to nix to
+// build layers.
+// Could be better:
+// * non-unwrap error handling
+// * layer packing
+// * more consistent naming for the docker JSON structure
 use actix_web::{web, App, HttpServer, HttpResponse};
 use serde::{Serialize};
 use std::vec::{Vec};
 use serde_json;
 use crypto::sha2::{Sha256};
 use crypto::digest::{Digest};
+use std::sync::Arc;
 
+mod store;
+
+
+#[derive(Debug)]
+struct Config<'a> {
+    /// Directory to store and serve blobs. Must exist.
+    blob_root: &'a std::path::Path,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -14,6 +29,7 @@ struct DockerManifestV2Config {
     digest: String,
 }
 
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DockerManifestV2 {
@@ -21,6 +37,7 @@ struct DockerManifestV2 {
     media_type: String,
     config: DockerManifestV2Config,
 }
+
 
 #[derive(Serialize)]
 #[derive(Debug)]
@@ -89,11 +106,11 @@ impl std::io::Write for HashAndWrite {
     }
 }
 
-fn build_layers() -> Vec<LayerMeta> {
+fn build_layers(config: web::Data<std::sync::Arc<Config>>, attr_path: &str) -> Vec<LayerMeta> {
     let _build = std::process::Command::new("nix-build")
         .arg("/home/tom/src/nixpkgs")
         .arg("-A")
-        .arg("hello")
+        .arg(attr_path)
         .output()
         .expect("build failed");
     // TODO - rename out result so we can query it?
@@ -123,10 +140,10 @@ fn build_layers() -> Vec<LayerMeta> {
         let temp_path = base_path.join("layer.tar");
         let haw = HashAndWrite::new(&temp_path);
         let mut archive_builder = tar::Builder::new(haw);
-        archive_builder.follow_symlinks(false); // keep symlinks in docker
+        // keep symlinks intact which is the behaviour we want in docker images
+        archive_builder.follow_symlinks(false);
 
         for x in chunk {
-            println!("{:?}", x);
             archive_builder.append_dir_all(x.strip_prefix("/").unwrap(), x).unwrap();
         }
         let mut archive = archive_builder.into_inner().unwrap();
@@ -138,22 +155,23 @@ fn build_layers() -> Vec<LayerMeta> {
             digest: format!("sha256:{}", archive.hex_encoded_hash()),
             size: archive.get_size(),
         });
-        // TODO - actually move layer.tar somewhere
+
+        std::fs::rename(temp_path, config.blob_root.join(archive.hex_encoded_hash()));
     }
     layers
 }
 
-fn blobs(info: web::Path<(String, String)>) -> HttpResponse {
+fn blobs(config: web::Data<std::sync::Arc<Config>>, info: web::Path<(String, String)>) -> HttpResponse {
     HttpResponse::Ok().body("".to_string())
 }
 
 
-fn manifests(info: web::Path<(String, String)>) -> HttpResponse {
+fn manifests(config: web::Data<std::sync::Arc<Config>>, info: web::Path<(String, String)>) -> HttpResponse {
     // tar_path = _git_checkout(name)
     // attribute_path = reference.split('.')
     // m['layers'] = list(_build_layers(attribute_path, tar_path))
 
-    let layers = build_layers();
+    let layers = build_layers(config, "hello");
 
     let rootfs = RootFSContainer {
         architecture: "amd64".to_string(),
@@ -198,8 +216,13 @@ fn v2() -> HttpResponse {
 
 
 fn main() -> std::io::Result<()>  {
+
+    let config = web::Data::new(Arc::new(Config {
+        blob_root: std::path::Path::new("/tmp"),
+    }));
     HttpServer::new(
-        || App::new()
+        move || App::new()
+            .register_data(config.clone())
             .route("/v2/", web::get().to(v2))
             .route("/v2/{name:.*?}/manifests/{reference}", web::get().to(manifests))
             .route("/v2/{name:.*?}/blobs/{reference}", web::get().to(blobs))
