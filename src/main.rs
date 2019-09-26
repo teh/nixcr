@@ -4,6 +4,7 @@
 // * non-unwrap error handling
 // * layer packing
 // * more consistent naming for the docker JSON structure]
+#[macro_use] extern crate log;
 use actix_files::NamedFile;
 use actix_web::{web, App, HttpServer, HttpResponse};
 use serde::{Serialize};
@@ -12,6 +13,7 @@ use serde_json;
 use crypto::sha2::{Sha256};
 use crypto::digest::{Digest};
 use std::sync::Arc;
+use actix_web::middleware::Logger;
 
 mod store;
 
@@ -87,8 +89,8 @@ impl HashAndWrite {
         }
     }
 
-    fn hex_encoded_hash(&mut self) -> String {
-        self.digest.result_str()
+    fn get_digest(&mut self) -> String {
+        format!("sha256:{}", self.digest.result_str())
     }
 
     fn get_size(&mut self) -> usize {
@@ -107,7 +109,7 @@ impl std::io::Write for HashAndWrite {
     }
 }
 
-fn build_layers(config: web::Data<std::sync::Arc<Config>>, attr_path: &str) -> Vec<LayerMeta> {
+fn build_layers(config: &Config, attr_path: &str) -> Vec<LayerMeta> {
     let _build = std::process::Command::new("nix-build")
         .arg("/home/tom/src/nixpkgs")
         .arg("-A")
@@ -153,11 +155,11 @@ fn build_layers(config: web::Data<std::sync::Arc<Config>>, attr_path: &str) -> V
         // because it goes into the layer meta)
         layers.push(LayerMeta {
             media_type: "application/vnd.docker.image.rootfs.diff.tar.gzip".to_string(),
-            digest: format!("sha256:{}", archive.hex_encoded_hash()),
+            digest: archive.get_digest(),
             size: archive.get_size(),
         });
 
-        std::fs::rename(temp_path, config.blob_root.join(archive.hex_encoded_hash()));
+        std::fs::rename(temp_path, config.blob_root.join(archive.get_digest()));
     }
     layers
 }
@@ -178,7 +180,7 @@ fn manifests(config: web::Data<std::sync::Arc<Config>>, info: web::Path<(String,
     // attribute_path = reference.split('.')
     // m['layers'] = list(_build_layers(attribute_path, tar_path))
 
-    let layers = build_layers(config, "hello");
+    let layers = build_layers(&config, "hello");
 
     let rootfs = RootFSContainer {
         architecture: "amd64".to_string(),
@@ -195,7 +197,10 @@ fn manifests(config: web::Data<std::sync::Arc<Config>>, info: web::Path<(String,
 
     let mut hasher = Sha256::new();
     hasher.input(&rootfs_blob);
-    let digest = hasher.result_str();
+    let digest = format!("sha256:{}", hasher.result_str());
+
+    // Store rootfs json in blob store
+    std::fs::write(config.blob_root.join(&digest), &rootfs_blob).unwrap();
 
     // TODO "sha256:" +
     let manifest = DockerManifestV2 {
@@ -204,7 +209,7 @@ fn manifests(config: web::Data<std::sync::Arc<Config>>, info: web::Path<(String,
         config: DockerManifestV2Config {
             media_type: "application/vnd.docker.container.image.v1+json".to_string(),
             size: rootfs_blob.len(),
-            digest: format!("sha256:{}", digest),
+            digest: digest,
         },
     };
 
@@ -223,12 +228,14 @@ fn v2() -> HttpResponse {
 
 
 fn main() -> std::io::Result<()>  {
+    env_logger::init();
 
     let config = web::Data::new(Arc::new(Config {
         blob_root: std::path::Path::new("/tmp/blobs"),
     }));
     HttpServer::new(
         move || App::new()
+            .wrap(Logger::default())
             .register_data(config.clone())
             .route("/v2/", web::get().to(v2))
             .route("/v2/{name:.*?}/manifests/{reference}", web::get().to(manifests))
