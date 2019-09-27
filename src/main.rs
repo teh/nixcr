@@ -84,7 +84,6 @@ enum Error {
     CommitNotFound { commit: String },
 }
 
-
 struct HashAndWrite {
     // implement Write trait but pipe output into hasher as well as file.
     tar: std::io::BufWriter<std::fs::File>,
@@ -125,7 +124,7 @@ impl std::io::Write for HashAndWrite {
 }
 
 /// clones (or fetches if already cloned) a git repo.
-fn clone_or_fetch_repo(git_dir: &std::path::Path, repo_config: &RepoConfig) -> Result<(),Error> {
+fn clone_or_fetch_repo(git_dir: &std::path::Path, repo_config: &RepoConfig) -> Result<(), Error> {
     if git_dir.is_dir() {
         info!("fetching for {:?}", git_dir);
         let fetch = std::process::Command::new("git")
@@ -141,7 +140,11 @@ fn clone_or_fetch_repo(git_dir: &std::path::Path, repo_config: &RepoConfig) -> R
             )
             .status()
             .unwrap();
-        if fetch.success() { Ok(())} else { Err(Error::FetchFailed) }
+        if fetch.success() {
+            Ok(())
+        } else {
+            Err(Error::FetchFailed)
+        }
     } else {
         // TODO make repo configurable + ssh key env
         info!("cloning {:?} to {:?}", repo_config.url, git_dir);
@@ -152,11 +155,19 @@ fn clone_or_fetch_repo(git_dir: &std::path::Path, repo_config: &RepoConfig) -> R
             .arg(git_dir)
             .status()
             .unwrap();
-        if clone.success() { Ok(())} else { Err(Error::CloneFailed) }
+        if clone.success() {
+            Ok(())
+        } else {
+            Err(Error::CloneFailed)
+        }
     }
 }
 
-fn get_git_tarball(git_dir: &std::path::Path, config: &Config, commit: &str) -> Result<std::path::PathBuf, Error> {
+fn get_git_tarball(
+    git_dir: &std::path::Path,
+    config: &Config,
+    commit: &str,
+) -> Result<std::path::PathBuf, Error> {
     // TODO - cache tarballs
     let archive = std::process::Command::new("git")
         .arg("--git-dir")
@@ -171,7 +182,7 @@ fn get_git_tarball(git_dir: &std::path::Path, config: &Config, commit: &str) -> 
 
     if !archive.status.success() {
         // TODO - parse archive.stdout to look for stuff like missing commits
-        return Err(Error::ArchiveFailed)
+        return Err(Error::ArchiveFailed);
     }
     let tar_bytes = archive.stdout;
 
@@ -207,7 +218,9 @@ fn build_layers(
         .arg(attr_path)
         .status()
         .expect("build failed");
-    if !build.success() { return Err(Error::BuildFailed) }
+    if !build.success() {
+        return Err(Error::BuildFailed);
+    }
 
     // TODO - rename out result so we can query it?
     //     alternatively query output from _build.
@@ -216,7 +229,9 @@ fn build_layers(
         .arg("result")
         .output()
         .expect("query failed");
-    if !query.status.success() { return Err(Error::QueryFailed) }
+    if !query.status.success() {
+        return Err(Error::QueryFailed);
+    }
 
     // Dumb even-sized layer chunker, I believe the query
     // returns in dependency order so this chunker will at least
@@ -281,7 +296,9 @@ fn manifests(config: HandlerConfig, info: web::Path<(String, String, String)>) -
     // (errors are 400s)
     let layers = match build_layers(&config, &info.0, &info.1, &info.2) {
         Ok(x) => x,
-        Err(Error::FetchFailed) => return HttpResponse::InternalServerError().body("git fetch failed"),
+        Err(Error::FetchFailed) => {
+            return HttpResponse::InternalServerError().body("git fetch failed")
+        }
         _ => return HttpResponse::InternalServerError().body("other layer creation error"),
     };
 
