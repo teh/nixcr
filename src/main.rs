@@ -58,6 +58,11 @@ struct RootFS {
     diff_ids: Vec<String>, // NB no camel case
 }
 
+#[derive(Serialize, Debug)]
+struct ImageConfig {
+}
+
+
 #[serde(rename_all = "camelCase")]
 #[derive(Serialize)]
 struct LayerMeta {
@@ -73,6 +78,7 @@ struct RootFSContainer {
     created: String,
     os: String,
     rootfs: RootFS,
+    config: ImageConfig,
 }
 
 enum Error {
@@ -310,6 +316,7 @@ fn manifests(config: HandlerConfig, info: web::Path<(String, String, String)>) -
             type_: "layers".to_string(),
             diff_ids: layers.iter().map(|x| x.digest.clone()).collect(),
         },
+        config: ImageConfig {},
     };
 
     // create a blob for the rootfs object

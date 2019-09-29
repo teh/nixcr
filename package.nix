@@ -28,7 +28,7 @@ in rec {
     name = "nixcr-${version}";
     version = "0.0.1";
     doCheck = false;
-    cargoSha256 = "1r204xda35yqp19w29w1w7l63bpqrhw0g31scj3n37j71hxqm7is";
+    cargoSha256 = "0ibbs8nrxcqrir173drgw9j6gf4walghcwilsls5jq732sszky8c";
     src = nix-gitignore.gitignoreSource [ "package.nix" "k8" "shell.nix" "README.md" ] ./.;
   };
   # nix-build package.nix -A image

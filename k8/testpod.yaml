@@ -6,5 +6,5 @@ metadata:
 spec:
   containers:
   - name: hello
-    image: 127.0.0.1:32746/nixpkgs/d2ccabaeeac:hello
-    command: ["/bin/hello"]
+    image: 127.0.0.1:32746/nixpkgs/d2ccabaeea:hello
+    command: ["/nix/store/rr3y0c6zyk7kjjl8y19s4lsrhn4aiq1z-hello-2.10/bin/hello"]
