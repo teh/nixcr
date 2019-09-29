@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: nixcr
+  labels:
+    app: nixcr
+spec:
+  type: NodePort
+  clusterIP: "10.0.14.109"
+  ports:
+  - port: 80
+    targetPort: 8888
+    name: web
+  selector:
+    app: nixcr

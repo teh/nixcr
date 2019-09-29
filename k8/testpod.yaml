@@ -1,0 +1,10 @@
+# check the dfcr is working
+apiVersion: v1
+kind: Pod
+metadata:
+  generateName: testpod-
+spec:
+  containers:
+  - name: hello
+    image: 127.0.0.1:32746/nixpkgs/d2ccabaeeac:hello
+    command: ["/bin/hello"]

@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nixcr
+spec:
+  selector:
+    matchLabels:
+      app: nixcr
+  serviceName: "nixcr"
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: nixcr
+    spec:
+      terminationGracePeriodSeconds: 10
+      containers:
+      - name: nixcr
+        image: eu.gcr.io/mm-boogle/nixcr:c3ee455
+        command: ["/bin/nixcr"]
+        args: [
+          "--blob-root", "/nixcr-cache/blob-root",
+          "--repo-root", "/nixcr-cache/blob-root",
+          "--repo" , "nixpkgs,https://github.com/NixOS/nixpkgs"
+        ]
+        env:
+        - name: RUST_BACKTRACE
+          value: "1"
+        resources:
+          requests:
+            memory: "800Mi"
+            cpu: "500m"
+          limits:
+            memory: "1200Mi"
+        ports:
+        - containerPort: 8888
+          name: web
+        volumeMounts:
+        - name: nixcr-cache
+          mountPath: /nixcr-cache/
+  volumeClaimTemplates:
+  - metadata:
+      name: nixcr-cache
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 30Gi
