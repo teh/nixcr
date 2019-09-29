@@ -434,6 +434,6 @@ fn main() -> std::io::Result<()> {
                 web::get().to(blobs),
             )
     })
-    .bind("127.0.0.1:8888")?
+    .bind("0.0.0.0:8888")?
     .run()
 }
