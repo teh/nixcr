@@ -24,7 +24,8 @@ spec:
         args: [
           "--blob-root", "/nixcr-cache/blob-root",
           "--repo-root", "/nixcr-cache/repo-root",
-          "--repo" , "nixpkgs,https://github.com/NixOS/nixpkgs"
+          "--repo", "nixpkgs,https://github.com/NixOS/nixpkgs",
+          "--repo", "lsexx,git@github.com:teh/lsexx.git,/secrets/deploy-key/deploy"
         ]
         env:
         - name: RUST_BACKTRACE
@@ -43,6 +44,14 @@ spec:
         volumeMounts:
         - mountPath: /nixcr-cache/
           name: nixcr-cache
+        - mountPath: /secrets/deploy-key
+          name: deploy-key
+          readOnly: true
+      volumes:
+      - name: deploy-key
+        secret:
+          secretName: deploy-key
+          defaultMode: 384
 
   volumeClaimTemplates:
   - metadata:

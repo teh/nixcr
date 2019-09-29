@@ -6,10 +6,11 @@
 // * more consistent naming for the docker JSON structure]
 //
 // TODO
-// * git repo integration (fetch before build)
 // * private cache (minio?)
 // * caching from key to layers
 // * error handling when commands fail
+// * expire layers (grouped together by key?)
+// * more granular user feedback
 #[macro_use]
 extern crate log;
 use actix_files::NamedFile;
@@ -131,19 +132,18 @@ impl<T: std::io::Write> std::io::Write for HashAndWrite<'_, T> {
 
 /// clones (or fetches if already cloned) a git repo.
 fn clone_or_fetch_repo(git_dir: &std::path::Path, repo_config: &RepoConfig) -> Result<(), Error> {
+    let git_ssh_command = match &repo_config.deploy_key_path {
+        Some(path) => format!("ssh -i {} -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no", path.display()),
+        None => "ssh".to_string(),
+    };
+
     if git_dir.is_dir() {
         info!("fetching for {:?}", git_dir);
         let fetch = std::process::Command::new("git")
+            .env("GIT_SSH_COMMAND", git_ssh_command)
             .arg("--git-dir")
             .arg(git_dir)
             .arg("fetch")
-            .env(
-                "GIT_SSH_COMMAND",
-                match &repo_config.deploy_key_path {
-                    Some(path) => format!("ssh -i {}", path.display()),
-                    None => "ssh".to_string(),
-                },
-            )
             .status()
             .expect("git fetch failed");
         if fetch.success() {
@@ -155,6 +155,7 @@ fn clone_or_fetch_repo(git_dir: &std::path::Path, repo_config: &RepoConfig) -> R
         // TODO make repo configurable + ssh key env
         info!("cloning {:?} to {:?}", repo_config.url, git_dir);
         let clone = std::process::Command::new("git")
+            .env("GIT_SSH_COMMAND", git_ssh_command)
             .arg("clone")
             .arg("--bare")
             .arg(&repo_config.url)
@@ -164,6 +165,7 @@ fn clone_or_fetch_repo(git_dir: &std::path::Path, repo_config: &RepoConfig) -> R
         if clone.success() {
             Ok(())
         } else {
+            error!("repo_config {:?}", repo_config);
             Err(Error::CloneFailed)
         }
     }
