@@ -84,20 +84,20 @@ enum Error {
     CommitNotFound { commit: String },
 }
 
-struct HashAndWrite {
+struct HashAndWrite<'a, T: std::io::Write> {
     // implement Write trait but pipe output into hasher as well as file.
-    tar: std::io::BufWriter<std::fs::File>,
+    tar: &'a mut T,
     digest: Sha256,
     size: usize,
 }
 
 /// implement io::Write and hash at the same time as writing the tarball
-impl HashAndWrite {
-    fn new(path: &std::path::Path) -> HashAndWrite {
+impl<T: std::io::Write> HashAndWrite<'_, T> {
+    fn new<'a>(writer: &'a mut T) -> HashAndWrite<'a, T> {
         HashAndWrite {
             // the tar writer seems somewht slow, and BufWriter
             // didn't make it faster.
-            tar: std::io::BufWriter::new(std::fs::File::create(path).unwrap()),
+            tar: writer,
             digest: Sha256::new(),
             size: 0,
         }
@@ -112,7 +112,7 @@ impl HashAndWrite {
     }
 }
 
-impl std::io::Write for HashAndWrite {
+impl<T: std::io::Write> std::io::Write for HashAndWrite<'_, T> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.digest.input(buf);
         self.size += buf.len();
@@ -139,7 +139,7 @@ fn clone_or_fetch_repo(git_dir: &std::path::Path, repo_config: &RepoConfig) -> R
                 },
             )
             .status()
-            .unwrap();
+            .expect("git fetch failed");
         if fetch.success() {
             Ok(())
         } else {
@@ -154,7 +154,7 @@ fn clone_or_fetch_repo(git_dir: &std::path::Path, repo_config: &RepoConfig) -> R
             .arg(&repo_config.url)
             .arg(git_dir)
             .status()
-            .unwrap();
+            .expect("git clone failed");
         if clone.success() {
             Ok(())
         } else {
@@ -178,7 +178,7 @@ fn get_git_tarball(
         .arg("x/")
         .arg(commit)
         .output()
-        .unwrap();
+        .expect("git archive failed");
 
     if !archive.status.success() {
         // TODO - parse archive.stdout to look for stuff like missing commits
@@ -190,7 +190,7 @@ fn get_git_tarball(
     // to store the tarballs.
     // TODO - process::Command write straight to a file?
     let tar_path = config.blob_root.join(commit);
-    std::fs::write(&tar_path, tar_bytes).unwrap();
+    std::fs::write(&tar_path, tar_bytes).expect("writing the archive tarball failed");
 
     Ok(tar_path)
 }
@@ -241,38 +241,38 @@ fn build_layers(
         if x.is_empty() {
             continue;
         };
-        all_paths.push(std::path::Path::new(std::str::from_utf8(x).unwrap()));
+        all_paths.push(std::path::Path::new(std::str::from_utf8(x).expect("nix-store -qR reading failed")));
     }
     let paths_per_layer = all_paths.len() / 100usize + 1;
 
-    // TODO - parametrize build path (temp folder?)
-    let base_path = std::path::Path::new("/tmp/nixcr");
-
     let mut layers = Vec::new();
     for chunk in all_paths.chunks(paths_per_layer) {
-        // TODO replace build.tar witih some temp thing
-        let temp_path = base_path.join("layer.tar");
-        let haw = HashAndWrite::new(&temp_path);
-        let mut archive_builder = tar::Builder::new(haw);
-        // keep symlinks intact which is the behaviour we want in docker images
-        archive_builder.follow_symlinks(false);
+        // temp_path needs to be in same directory as blobs so unix rename works
+        let mut temp_path = tempfile::NamedTempFile::new_in(&config.blob_root).expect("creating a named temp file failed");
+        let digest = {
+            let haw = HashAndWrite::new(&mut temp_path);
+            let mut archive_builder = tar::Builder::new(haw);
+            // keep symlinks intact which is the behaviour we want in docker images
+            archive_builder.follow_symlinks(false);
 
-        for x in chunk {
-            archive_builder
-                .append_dir_all(x.strip_prefix("/").unwrap(), x)
-                .unwrap();
-        }
-        let mut archive = archive_builder.into_inner().unwrap();
+            for x in chunk {
+                archive_builder
+                    .append_dir_all(x.strip_prefix("/").expect("stripping leading / failed"), x)
+                    .expect("append_dir_all failed");
+            }
+            let mut archive = archive_builder.into_inner().expect("could not write archive");
 
-        // Move built key to its digest (which we need to calculate anyway due
-        // because it goes into the layer meta)
-        layers.push(LayerMeta {
-            media_type: "application/vnd.docker.image.rootfs.diff.tar.gzip".to_string(),
-            digest: archive.get_digest(),
-            size: archive.get_size(),
-        });
-
-        std::fs::rename(temp_path, config.blob_root.join(archive.get_digest()));
+            // Move built key to its digest (which we need to calculate anyway due
+            // because it goes into the layer meta)
+            layers.push(LayerMeta {
+                media_type: "application/vnd.docker.image.rootfs.diff.tar.gzip".to_string(),
+                digest: archive.get_digest(),
+                size: archive.get_size(),
+            });
+            archive.get_digest()
+        };
+        info!("packaged layer {:?}", digest);
+        temp_path.persist(config.blob_root.join(digest)).unwrap();
     }
     Ok(layers)
 }
@@ -313,14 +313,16 @@ fn manifests(config: HandlerConfig, info: web::Path<(String, String, String)>) -
     };
 
     // create a blob for the rootfs object
-    let rootfs_blob = serde_json::to_vec(&rootfs).unwrap();
+    let rootfs_blob = serde_json::to_vec(&rootfs).expect("could not json-encode rootfs");
 
     let mut hasher = Sha256::new();
     hasher.input(&rootfs_blob);
     let digest = format!("sha256:{}", hasher.result_str());
 
     // Store rootfs json in blob store
-    std::fs::write(config.blob_root.join(&digest), &rootfs_blob).unwrap();
+    let rootfs_path = &config.blob_root.join(&digest);
+    std::fs::write(rootfs_path, &rootfs_blob).expect(
+        &format!("Could not write digest to {:?}", rootfs_path.display()));
 
     // TODO "sha256:" +
     let manifest = DockerManifestV2 {
@@ -392,7 +394,7 @@ impl RepoConfig {
     }
     /// returns path for where to clone / fetch the repo
     fn git_dir(&self) -> std::path::PathBuf {
-        let re = regex::Regex::new(r"[^A-Za-z_]").unwrap();
+        let re = regex::Regex::new(r"[^A-Za-z_]").expect("invalid repo url regex");
         // anything that's not a letter gets replaced with _
         // this can lead to collisions which is not great but OK for this use case?
         std::path::PathBuf::from(re.replace_all(&self.url, "_").into_owned())
@@ -417,8 +419,8 @@ fn main() -> std::io::Result<()> {
         repo_configs,
     }));
 
-    std::fs::create_dir_all(&config.blob_root).unwrap();
-    std::fs::create_dir_all(&config.repo_root).unwrap();
+    std::fs::create_dir_all(&config.blob_root).expect("Could not create blob-root");
+    std::fs::create_dir_all(&config.repo_root).expect("Could not create repo-root");
 
     HttpServer::new(move || {
         App::new()

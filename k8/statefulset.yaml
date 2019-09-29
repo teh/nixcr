@@ -17,15 +17,20 @@ spec:
       containers:
       - name: nixcr
         image: eu.gcr.io/mm-boogle/nixcr:c3ee455
+        imagePullPolicy: "Always"
+        securityContext:
+          privileged: true
         command: ["/bin/nixcr"]
         args: [
           "--blob-root", "/nixcr-cache/blob-root",
-          "--repo-root", "/nixcr-cache/blob-root",
+          "--repo-root", "/nixcr-cache/repo-root",
           "--repo" , "nixpkgs,https://github.com/NixOS/nixpkgs"
         ]
         env:
         - name: RUST_BACKTRACE
           value: "1"
+        - name: RUST_LOG
+          value: "info,actix_web=info"
         resources:
           requests:
             memory: "800Mi"
@@ -36,8 +41,9 @@ spec:
         - containerPort: 8888
           name: web
         volumeMounts:
-        - name: nixcr-cache
-          mountPath: /nixcr-cache/
+        - mountPath: /nixcr-cache/
+          name: nixcr-cache
+
   volumeClaimTemplates:
   - metadata:
       name: nixcr-cache

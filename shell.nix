@@ -12,10 +12,5 @@ stdenv.mkDerivation {
   buildInputs = [
     openssl
   ];
-  propagatedBuildInputs = [
-    nix
-    git
-    openssh
-  ];
   RUST_BACKTRACE = 1;
 }
