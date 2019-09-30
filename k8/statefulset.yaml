@@ -34,10 +34,10 @@ spec:
           value: "info,actix_web=info"
         resources:
           requests:
-            memory: "800Mi"
-            cpu: "500m"
+            memory: "2Gi"
+            cpu: 1
           limits:
-            memory: "1200Mi"
+            memory: "6Gi"
         ports:
         - containerPort: 8888
           name: web

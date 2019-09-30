@@ -11,6 +11,8 @@
 // * error handling when commands fail
 // * expire layers (grouped together by key?)
 // * more granular user feedback
+// * locking when hiting the same key multiple times
+// * monitoring with prometheus
 #[macro_use]
 extern crate log;
 use actix_files::NamedFile;

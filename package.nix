@@ -3,6 +3,11 @@ with import (fetchTarball {
   sha256 = "0j295k1gxnmx1wc88b4gn869qih6nnrkrqzj3kmp04cz2dk6ds50";
 }) {};
 let
+naersk = callPackage (fetchTarball {
+  url = https://github.com/nmattia/naersk/archive/master.tar.gz;
+  sha256 = "0890hg9ngyh4y7cy68ii0k3chicixcnbg0scdcr6c2ig35wl35z1";
+});
+
 baseLayout = runCommandNoCC "baseLayout" { nativeBuildInputs = [ shadow ]; } ''
   set -e
   mkdir -p $out
@@ -22,14 +27,12 @@ baseLayout = runCommandNoCC "baseLayout" { nativeBuildInputs = [ shadow ]; } ''
     echo "nixbld$i:x:30001:30000:Nix build user $i:/empty:/bin/nologin" >> $out/etc/passwd
   done
 '';
-
+nixcr-source = (nix-gitignore.gitignoreSource [ "package.nix" "k8" "shell.nix" "README.md" ] ./.);
 in rec {
-  bin = rustPlatform.buildRustPackage rec {
+  bin = naersk.buildPackage nixcr-source rec {
     name = "nixcr-${version}";
     version = "0.0.1";
     doCheck = false;
-    cargoSha256 = "0ibbs8nrxcqrir173drgw9j6gf4walghcwilsls5jq732sszky8c";
-    src = nix-gitignore.gitignoreSource [ "package.nix" "k8" "shell.nix" "README.md" ] ./.;
   };
   # nix-build package.nix -A image
   # docker load <result
@@ -53,6 +56,7 @@ in rec {
       nix
       gnutar
       cacert
+      gzip # to unpack nixpkg tarballs
       iana-etc # needed not sure why!
       # git with perl and python is huge, breaks without perl (/usr/bin/perl: No such file or directory)
       (git.override { withManual = false; pythonSupport = false; })
