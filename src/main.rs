@@ -266,8 +266,16 @@ fn build_layers(
             archive_builder.follow_symlinks(false);
 
             for x in chunk {
+                // for the last layer we need to remove the /nix/store/...
+                // prefix so /bin etc live in the top level image
+                let in_tar_path = if Some(x) == all_paths.last() {
+                    std::path::Path::new(".")
+                } else {
+                    x.strip_prefix("/").expect("stripping leading / failed")
+                };
+                info!("in_tar_path {}", in_tar_path.display());
                 archive_builder
-                    .append_dir_all(x.strip_prefix("/").expect("stripping leading / failed"), x)
+                    .append_dir_all(in_tar_path, x)
                     .expect("append_dir_all failed");
             }
             let mut archive = archive_builder.into_inner().expect("could not write archive");
