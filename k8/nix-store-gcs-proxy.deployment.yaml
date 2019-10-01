@@ -29,3 +29,5 @@ spec:
         ports:
         - containerPort: 3000
           name: web
+      nodeSelector:
+        cloud.google.com/gke-nodepool: "infra-pool"

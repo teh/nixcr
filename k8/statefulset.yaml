@@ -52,6 +52,8 @@ spec:
         secret:
           secretName: deploy-key
           defaultMode: 384
+      nodeSelector:
+        cloud.google.com/gke-nodepool: "infra-pool"
 
   volumeClaimTemplates:
   - metadata:
