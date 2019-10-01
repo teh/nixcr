@@ -26,6 +26,10 @@ baseLayout = runCommandNoCC "baseLayout" { nativeBuildInputs = [ shadow ]; } ''
   for i in $(seq 1 10); do
     echo "nixbld$i:x:30001:30000:Nix build user $i:/empty:/bin/nologin" >> $out/etc/passwd
   done
+
+  mkdir -p $out/etc/nix/
+  echo 'substituters = https://cache.nixos.org/ http://nix-store-gcs-proxy/' >> $out/etc/nix/nix.conf
+  echo 'trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= cache1.example.org:jPYGIQLF9Rng+Tnj5VPrXXyXUicyA3a3dyhQrL96ItA=' >> $out/etc/nix/nix.conf
 '';
 nixcr-source = (nix-gitignore.gitignoreSource [ "package.nix" "k8" "shell.nix" "README.md" ] ./.);
 in rec {
@@ -34,6 +38,21 @@ in rec {
     version = "0.0.1";
     doCheck = false;
   };
+
+  nix-store-gcs-proxy-image = dockerTools.buildLayeredImage {
+    name = "eu.gcr.io/mm-boogle/nix-store-gcs-proxy";
+    tag = "0.0.1";
+    config = {
+      Env = [
+        "PATH=/bin/"
+        "NIX_SSL_CERT_FILE=${cacert}/etc/ssl/certs/ca-bundle.crt"
+      ];
+    };
+    contents = [
+      nix-store-gcs-proxy
+    ];
+  };
+
   # nix-build package.nix -A image
   # docker load <result
   # docker push eu.gcr.io/mm-boogle/nixcr:commit

@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nix-store-gcs-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nix-store-gcs-proxy
+  template:
+    metadata:
+      labels:
+        app: nix-store-gcs-proxy
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+      - name: nix-store-gcs-proxy
+        image: eu.gcr.io/mm-boogle/nix-store-gcs-proxy:0.0.1
+        command: ["/bin/nix-store-gcs-proxy"]
+        args: [
+          "--bucket-name", "mm-nix-cache",
+          "--addr", "0.0.0.0:3000"
+        ]
+        resources:
+          requests:
+            memory: "50Mi"
+          limits:
+            memory: "50Mi"
+        ports:
+        - containerPort: 3000
+          name: web
