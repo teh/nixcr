@@ -5,7 +5,7 @@ with import (fetchTarball {
 let
 naersk = callPackage (fetchTarball {
   url = https://github.com/nmattia/naersk/archive/master.tar.gz;
-  sha256 = "0890hg9ngyh4y7cy68ii0k3chicixcnbg0scdcr6c2ig35wl35z1";
+  sha256 = "1hp1l86qlkmipcas90p4s4q5bhgh0531nl3lkignz1q455vrga0f";
 }) {};
 
 baseLayout = runCommandNoCC "baseLayout" { nativeBuildInputs = [ shadow ]; } ''

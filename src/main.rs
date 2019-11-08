@@ -274,9 +274,15 @@ fn build_layers(
                     x.strip_prefix("/").expect("stripping leading / failed")
                 };
                 info!("in_tar_path {}", in_tar_path.display());
-                archive_builder
-                    .append_dir_all(in_tar_path, x)
-                    .expect("append_dir_all failed");
+                if x.is_dir() {
+                    archive_builder
+                        .append_dir_all(in_tar_path, x)
+                        .expect("append_dir_all failed");
+                } else {
+                    archive_builder
+                        .append_path_with_name(x, in_tar_path)
+                        .expect("append_path_with_name failed");
+                }
             }
             let mut archive = archive_builder.into_inner().expect("could not write archive");
 
