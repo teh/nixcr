@@ -374,12 +374,13 @@ fn v2() -> HttpResponse {
 }
 
 const USAGE: &str = "
-Usage: nixcr --blob-root BLOBROOT --repo-root REPOROOT --repo REPO...
+Usage: nixcr --blob-root BLOBROOT --repo-root REPOROOT --port PORT --repo REPO...
 
 Options:
     --blob-root BLOBROOT  Where to store blobs (e.g. persistent disk)
     --repo-root REPOROOT  Where to store cloned repos (e.g. persitent disk)
     --repo REPO            One repo config in the form url,key-path
+    --port PORT            One repo config in the form url,key-path
 ";
 
 #[derive(Deserialize, Debug)]
@@ -387,6 +388,7 @@ struct Args {
     flag_repo: Vec<String>,
     flag_repo_root: String,
     flag_blob_root: String,
+    flag_port: String,
 }
 
 #[derive(Debug)]
@@ -461,6 +463,6 @@ fn main() -> std::io::Result<()> {
                 web::get().to(blobs),
             )
     })
-    .bind("0.0.0.0:8888")?
+    .bind(format!("0.0.0.0:{}", args.flag_port))?
     .run()
 }
